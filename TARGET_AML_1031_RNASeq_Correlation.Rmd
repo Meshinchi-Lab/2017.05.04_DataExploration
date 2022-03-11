@@ -1,0 +1,162 @@
+---
+title: 'RNA-seq Correlation'
+author: "Jenny Smith"
+date: "February 2, 2018"
+output: html_document
+---
+
+
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),tidy=TRUE, fig.align='center', fig.width = 10, fig.height = 10)
+knitr::opts_knit$set(root.dir = '/fh/fast/meshinchi_s/workingDir/TARGET/AML_TARGET/RNA/Nanostring/analysis/2017.05.04_DataExploration')
+```
+
+
+```{r message = FALSE, warning=FALSE}
+library(stringr)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+library(tibble)
+library(tidyr)
+getwd()
+```
+
+
+```{r}
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/Expression_Distribution_Plots_Function.r")
+source("~/scripts/RNAseq_Analysis/MSLN_waterfallplots/Waterfall_Barplot_Function_2017.05.22.r")
+source("~/scripts/conversion_scripts/Merge_Cat_FixDupIDs_Function.r")
+```
+
+
+
+#Read in the Clinical Data
+
+```{r}
+CDE.1031 <- read.csv("~/reference_mapping-files/TARGET_AML_1031_CDE_cleaned_1.31.2018.csv", 
+                     stringsAsFactors = FALSE, row.names = 1)
+
+
+head(CDE.1031[,1:5])
+```
+
+
+
+#Read in the annotation files
+
+```{r}
+anno <- read.csv("~/Nanostring_Analysis/2017.05.04_DataExploration/NanostringAnnotations_04May2017.csv", stringsAsFactors = FALSE)
+
+dim(anno)
+```
+
+```{r}
+anno.cd34 <- anno[grepl("CD34|OtherCells", anno$DX_Induction), ]
+dim(anno.cd34)
+```
+
+
+```{r}
+anno <- anno[which(grepl("DX|Induc|BM", anno$DX_Induction)), ]
+anno <- fixDupIDs(anno, "USI",type = "rownames")
+
+dim(anno)
+```
+
+```{r}
+head(anno)
+```
+
+
+```{r}
+LSC <- read.csv("~/RNA_seq_Analysis/2017.02.28_LSC17_Score/TARGET/104_LSC17_genes_FCs.csv",
+                stringsAsFactors = FALSE)
+
+head(LSC)
+# dim(LSC) #103  11
+```
+
+
+
+#Read in the Count information
+
+```{r}
+cts <- get(load("~/Nanostring_Analysis/2017.05.04_DataExploration/TARGET_AML_NanostringCounts_list.RData"))
+geomean <- cts$geomean
+
+head(geomean)
+```
+
+
+```{r}
+RPKM.1031 <- read.csv("~/RNA_seq_Analysis/0000.00.03_Expression_Matrices/TARGET_AML_AAML1031_dupGenesRemoved_RPKM.csv", stringsAsFactors = FALSE, row.names = 1)
+
+head(RPKM.1031[,1:5])
+```
+
+
+
+#Correlation of LSC17 genes 
+
+
+```{r}
+UpReg <- LSC %>%
+  filter(Log2.Fold.Changet > 0) %>%
+  select(SYMBOL, Log2.Fold.Changet, P.valueJ, Signature.Gene)
+
+dim(UpReg)
+
+
+# write.csv(UpReg, "~/AML_Literature/LSC17/Grant/LSC_UpRegulated_Genes.csv", row.names = FALSE)
+```
+
+
+```{r}
+LSC.Nanostring <- geomean %>% 
+  rownames_to_column("gene") %>%
+  filter(gene %in% UpReg$SYMBOL | gene %in% UpReg$Gene.Symbol) %>%
+  mutate_if(is.numeric, funs(log2(.+1))) %>%
+  gather(var,value,-gene) %>%
+  spread(gene,value)
+ 
+rownames(LSC.Nanostring) <- LSC.Nanostring[,1]
+LSC.Nanostring <- LSC.Nanostring[,-1]
+
+head(LSC.Nanostring[,1:5])
+dim(LSC.Nanostring)  
+```
+
+
+```{r}
+LSC.RPKM <- RPKM.1031 %>%
+  rownames_to_column("gene") %>%
+  filter(gene %in% LSC.Nanostring$gene) %>%
+  mutate_if(is.numeric, funs(log2(.+1))) %>%
+  gather(var,value,-gene) %>%
+  spread(gene,value) 
+
+
+rownames(LSC.RPKM) <- LSC.RPKM[,1]
+LSC.RPKM <- LSC.RPKM[,-1]
+LSC.RPKM <- LSC.RPKM[,colnames(LSC.Nanostring)] #order
+
+
+# dim(LSC.RPKM) # 12 1112
+head(LSC.RPKM[,1:5])
+```
+
+
+
+
+
+
+
+
+#Session Information 
+
+```{r}
+sessionInfo()
+```
+

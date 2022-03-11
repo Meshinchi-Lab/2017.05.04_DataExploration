@@ -1,0 +1,536 @@
+---
+title: "Nanostring Data Exploration"
+author: "Jenny Smith"
+date: "May 4, 2017"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+Purpose: To explore the normalized and raw Nanostring Data. 
+
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),tidy=TRUE, fig.align='center', fig.height = 4, fig.width = 6)
+knitr::opts_knit$set(root.dir = "~/Nanostring_Analysis/2017.05.04_DataExploration/")
+
+```
+
+
+```{r message = FALSE, warning=FALSE}
+library(survival)
+library(RColorBrewer)
+library(colorspace)
+library(stringr)
+library(GEOquery)
+library(Biobase)
+library(dplyr)
+library(ggplot2)
+library(GGally)
+library(gridExtra)
+library(grid)
+library(magrittr)
+getwd()
+```
+
+
+```{r}
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/Expression_Distribution_Plots_Function.r")
+source("~/scripts/RNAseq_Analysis/MSLN_waterfallplots/Waterfall_Barplot_Function_2017.05.22.r")
+source("~/scripts/ConversionScripts/Merge_Cat_FixDupIDs_Function.r")
+```
+
+
+#Define Functions to be used
+```{r}
+PatientDist <- function(df, dfName){
+  colors = rainbow_hcl(186)
+  par(pty="m", las=2, mar=c(5,4,5,2))
+  boxplot(df, col=colors,cex.axis=0.45,outline=FALSE, ylim=c(0,17))
+  
+  title <- paste("Distribution of Gene Expression for TARGET AML \n ", dfName, sep = " ")
+  title(main = title, line = 2.5, cex.main = 0.8, ylab = "Log2 Counts", xlab="Patient", cex.lab=0.75)
+}
+```
+
+```{r}
+geneDist <- function(df, dfName){
+  colors = rainbow_hcl(50)
+  par(pty="m", las=2, mar=c(5,4,5,2))
+  
+  df <- as.data.frame(t(df))
+  
+  df1 <- df[,1:50]
+  df2 <- df[,51:100]
+  df3 <- df[,101:150]
+  df4 <- df[,151:200]
+  df5 <- df[,201:234]
+  
+  for (i in 1:5){
+    df <- get(paste("df", i, sep=""))
+    boxplot(df, col=colors,cex.axis=0.65)
+    title <- paste("Distribution of Gene Expression in TARGET AML:", dfName, sep = " ")
+    title(main = title, line = 3.0, cex.main = 0.8, ylab = "Log2 Counts", xlab="Gene Name", cex.lab=0.75)
+  }
+}
+```
+
+
+
+#Read in the annotation files
+
+```{r}
+anno <- read.csv("~/Nanostring_Analysis/2017.05.04_DataExploration/NanostringAnnotations_04May2017.csv", stringsAsFactors = FALSE)
+
+dim(anno)
+```
+
+```{r}
+anno.cd34 <- anno[grepl("CD34|OtherCells", anno$DX_Induction), ]
+dim(anno.cd34)
+```
+
+
+```{r}
+anno <- anno[which(grepl("DX|Induc|BM", anno$DX_Induction)), ]
+anno <- fixDupIDs(anno, "USI",type = "rownames")
+
+dim(anno)
+```
+
+```{r}
+head(anno)
+```
+
+
+
+#Read in the raw and normalized count data from nanostring
+
+```{r}
+geomean <- read.csv("~/Nanostring_Analysis/2017.05.04_DataExploration/AML_EXPR_C5117_DX_Induction_BM_Normalized_Geomean_Counts.csv", stringsAsFactors = FALSE)
+
+scaled <- read.csv("~/Nanostring_Analysis/2017.05.04_DataExploration/AML_EXPR_C5117_DX_Induction_BM_Normalized_Scaled1e6_Counts.csv", stringsAsFactors = FALSE)
+
+raw <- read.csv("~/Nanostring_Analysis/2017.05.04_DataExploration/AML_EXPR_C5117_DX_Induction_BM_Raw_Counts.csv", stringsAsFactors = FALSE)
+```
+
+
+```{r}
+head(geomean[,1:12])
+# dim(geomean)
+```
+
+```{r}
+head(raw[,1:10])
+# dim(raw)
+```
+
+#Format the dataframes for patient IDs as USIs and genes as rownames
+
+```{r}
+input <- list(geomean,scaled,raw)
+
+counts <- list()
+phenoVector <- list()
+for (i in 1:3){
+  genes <-unique(input[[i]][,1]) %>% grep("\\w", . ,value=TRUE) #unique gene names
+  
+  input[[i]] <- input[[i]][-(1:2), ] #remove two rows
+  input[[i]][10:ncol(input[[i]])] <- sapply(input[[i]][10:ncol(input[[i]])], function(x) as.numeric(as.character(x))) #convert columns to numeric class
+  
+  #set rownames as genes
+  rownames(input[[i]]) <- genes 
+  
+  #only endogenous genes to be investigated
+  input[[i]] <- input[[i]][which(input[[i]]$Class.Name == "Endogenous"), ]
+  input[[i]] <- input[[i]][,-(1:9)] #remove the first 9 columns
+  
+  #set column names as patient USIs
+  colnames(input[[i]]) <- anno$USI #colnames are in same  order as annotation file.
+  input[[i]] <- input[[i]][,order(colnames(input[[i]]), decreasing = TRUE)]
+  
+  #create phenotype vector 
+  phenos <- ifelse(grepl("\\.1", colnames(input[[i]])), "Induction", colnames(input[[i]])) %>% ifelse(grepl("^BM", . ), "BM", . ) %>% ifelse(!grepl("^In.+|^BM", . ), "DX", . )
+  names(phenos) <- colnames(input[[i]])
+
+  #add the dataframe or phenovector to the lists
+  counts[[i]] <- input[[i]] #append dataframe to a list
+  phenoVector[[i]] <- phenos
+}
+
+names(counts) <- c("geomean", "scaled", "raw")
+names(phenoVector) <- c("geomean", "scaled", "raw")
+```
+
+
+```{r}
+summary(counts)
+sapply(counts, nrow) 
+```
+
+
+```{r}
+head(counts$geomean[,c(1:4,180:183)]) #paired samples (EOI1,EOI2, adn Intens) are denoted with .1 suffix
+```
+
+```{r}
+phenoVector$geomean[1:4]
+```
+
+
+```{r}
+# save(counts,file= "TARGET_AML_NanostringCounts_list.RData")
+# save(phenoVector, file="TARGET_AML_phenovectors_list.RData")
+```
+
+
+#Load the RData file
+
+```{r}
+counts <- get(load("TARGET_AML_NanostringCounts.RData"))
+```
+
+```{r}
+summary(counts)
+```
+
+```{r}
+head(counts$geomean[,1:5])
+# geomean <- counts$geomean
+```
+
+#Read in the TPM Values from RNAseq
+
+```{r}
+LD_TPM <- get(load("RNAseq_ExpnData/TARGET_AML_TPM_withGenesasRowNames_BCCA28Apr2016.RData"))
+
+head(LD_TPM[,1:5])
+```
+
+
+```{r}
+HD_TPM <- get(load("RNAseq_ExpnData/TARGET_AML_TPM_withGenesasRowNames_Aug2014.RData"))
+
+head(HD_TPM[,1:5])
+```
+
+```{r}
+TPM <- list(LD_TPM, HD_TPM)
+names(TPM) <- c("LD", "HD")
+
+sapply(TPM, dim)
+```
+
+```{r}
+# sapply(TPM$HD, class)
+# log2((LD_TPM["DPM1", 1:5]+1))
+```
+
+
+#PCA Analysis with Batch Information
+
+```{r}
+library(genefilter)
+
+topVarGenes <- counts$geomean[order(rowVars(counts$geomean),decreasing=TRUE), ] %>% .[1:180, ]
+```
+
+```{r}
+pca_df <- merge_CDE_Expn(anno,counts$geomean, rownames(topVarGenes))
+
+dim(pca_df)
+```
+
+```{r}
+head(pca_df)
+# head(pca_df[,c(1,6:10)])
+# tail(pca_df[,c(1,6:10)])
+# complete.cases(pca_df)
+```
+
+
+```{r}
+library(corrplot)
+cor.matrix <- cor(pca_df[,10:ncol(pca_df)])
+
+corrplot(cor.matrix, order = "FPC", method = "shade", tl.cex = 0.4,
+tl.col = "black", cl.cex = 0.75, cl.pos = "b", mar = c(0,
+0, 1, 0), main = "Correlation Plot for Gene Expression Levels")
+```
+
+
+They are all highly correlated because we picked the highest expression genes. 
+
+```{r}
+log.expn <- scale(log2(pca_df[,10:ncol(pca_df)] + 0.01))
+pca.scaled <- cbind(pca_df[c(9,4)], log.expn)
+head(pca.scaled)
+```
+
+```{r}
+pca <- princomp(pca.scaled[,3:ncol(pca.scaled)],cor = T, scores = T)
+scores <- as.data.frame(unclass(pca$scores))
+pca_plot <- ggplot(scores, aes(x=scores$Comp.1, y=scores$Comp.2))
+```
+
+```{r fig.height=5, fig.width=7}
+# pdf(file="TARGET_AML_Nanostringpanel_pca_byBatch.pdf")
+pcaPlot_batch <- pca_plot + geom_point(aes(color=factor(pca.scaled$Batch))) + theme_bw() + labs(title = "Z-Scores of TARGET AML Gene Expression Levels", x = "principal Component 1", y = "principal Component 2")
+# dev.off()
+
+# pdf(file="TARGET_AML_nanostringPanel_pca_byGroup.pdf")
+pcaPlot_grp <- pca_plot + geom_point(aes(color=factor(pca.scaled$DX_Induction)))  + theme_bw() + labs(title = "Z-Scores of TARGET AML Gene Expression Levels", x = "principal Component 1", y = "principal Component 2")
+# dev.off()
+```
+
+
+```{r fig.height=4, fig.width=11}
+# pdf(file="TARGET_AML_NanostringPanel_pcaPlots.pdf", height = 7, width = 11)
+grid.arrange(pcaPlot_batch, pcaPlot_grp, ncol=2)
+# dev.off()
+```
+
+
+
+
+#Boxplots of Pateints Expression
+
+```{r}
+log2 <- lapply(counts, function(x) log2(x+1))
+```
+
+```{r}
+head(log2$geomean[,c(1:4,180:183)])
+```
+
+```{r fig.height=7, fig.width=13}
+invisible(mapply(PatientDist, log2,dfName=c("Geometric Mean Normalized Counts", "Scaled Normalized Counts", "Raw Counts"), SIMPLIFY = TRUE))
+```
+
+
+```{r fig.height=7, fig.width=10}
+invisible(mapply(geneDist, log2,dfName=c("Geometric Mean Normalized Counts", "Scaled Normalized Counts", "Raw Counts"), SIMPLIFY = TRUE))
+```
+
+
+
+#Distribtion by Group (DX, Induction (Trt), BM)
+
+```{r}
+# genelists <- lapply(log2, rownames)
+genelists <- lapply(counts, rownames)
+
+```
+
+```{r message=FALSE, warning=FALSE}
+# pdf(file="boxplots_densityplots_nanostring_geneExpression.pdf")
+#returns linear scale counts
+DistributionByGroup <- mapply(expnDist,counts,phenoVector,genelists,unit="counts", plot=FALSE, SIMPLIFY = FALSE)
+DistLog2_ByGroup <- mapply(expnDist,counts,phenoVector,genelists,unit="log2 counts", logCPM=FALSE,plot=FALSE, SIMPLIFY = FALSE)
+# dev.off()
+```
+
+
+```{r}
+for (i in 1:3){
+  name <- paste(names(counts)[i], "counts_densityplot_boxplot.pdf",sep="_")
+  # print(name)
+  # pdf(file=name)
+  expnDist(counts[[i]], phenoVector[[i]], genelists[[i]],unit="log2 counts", logCPM = FALSE, plot=TRUE)
+  # dev.off()
+}
+```
+
+
+```{r}
+summary(DistributionByGroup)
+# save(DistributionByGroup, file="CountsList_with_GenesasColumns_withGroups.RData")
+# write.csv(DistributionByGroup$geomean, file="TARGET_AML_NanostringPanel_GeomeanNormalizedCounts_GenesasColumns_withControls.csv")
+```
+
+
+
+#Mean Gene Expression with Normalized COunts - linear Scale (NOT log2)
+
+```{r}
+head(DistributionByGroup$geomean[,c(1:5,235)]) #normalized counts - linear scale
+
+# colnames(DistributionByGroup$geomean)
+```
+
+```{r}
+library(psych)
+descStats <- describeBy(DistributionByGroup$geomean,group=DistributionByGroup$geomean$Status, digits = 3)
+```
+
+```{r}
+#possible alternative 
+t2 <- aggregate(DistributionByGroup$geomean$MSLN, by=list(DistributionByGroup$geomean$Status), FUN=mean)
+# t2
+```
+
+```{r}
+groups <- c("BM", "DX", "Induction")
+cols <- NULL
+for (i in 1:3){
+  cnames <- paste(colnames(descStats[[i]][,c(2:5,8:9)]), groups[i], sep="_")
+  cols <- c(cols,cnames)
+}
+
+cols <- c("Genes", cols)
+```
+
+```{r}
+stats <- cbind(descStats$BM[,c(2:5,8:9)], descStats$DX[,c(2:5,8:9)])
+stats <- cbind(stats, descStats$Induction[,c(2:5,8:9)])
+
+stats <- cbind(rownames(stats),stats)
+names(stats) <- cols
+
+head(stats)
+# save(stats, file="SummaryStatisticsByGroup_perGene.RData")
+```
+
+
+```{r}
+# head(counts$geomean)
+merged <- merge(stats,counts$geomean, by.x=0, by.y=0)
+# save(merged, file="SummaryStats_and_geomean_normalized_counts_withControls.RData")
+# write.csv(merged, file="TARGET_AML_NanostringPanel_SummaryStats_and_geomeanNormalizedCounts_withControls.csv")
+```
+
+##Mean Gene Expression by Log2 Counts
+
+```{r}
+Log2descStats <- describeBy(DistLog2_ByGroup$geomean,group=DistLog2_ByGroup$geomean$Status, digits = 3)
+
+
+means <- NULL
+means <- rbind(Log2descStats$BM, Log2descStats$DX)
+means <- rbind(means, Log2descStats$Induction)
+means <- as.data.frame(means)
+
+means$Gene <- rep(rownames(Log2descStats$BM), 3)
+means <- means[which(!grepl("Stat", rownames(means))), ]
+means$Group <- c(rep("BM", 234),rep("DX",234),rep("Induction", 234))
+
+# head(means)
+# tail(means)
+dim(means) #702
+```
+
+
+```{r}
+# save(means, file="TARGET_AML_meanGeneExpression_byGroup.RData")
+```
+
+
+##Look at all genes 
+```{r fig.height=8,fig.width=11}
+# pdf(file="barplot_allGenes_MeanExpression.pdf", height = 8, width = 11)
+ggplot(means, aes(x=reorder(means$Gene,means$mean), y=means$mean, fill=Group)) + 
+  geom_bar(stat="identity", position = position_dodge(0.9)) + 
+  theme(plot.title = element_text(hjust = 0.5, size = 18),
+          panel.background = element_rect(fill="white"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.text.x = element_text(angle = 45,hjust = 1, vjust = 0.5, size = 2.5),
+          axis.text.y = element_text(size = 14),
+          axis.title = element_text(size = 15)) +
+    labs(x="Gene", y="Mean Log2 Count", title="Mean Gene Expression for Nanostring Panel")
+
+# dev.off()
+# ggplot(means, aes(x=reorder(means$Gene,means$mean), y=means$mean, fill=Group)) + geom_bar(stat="identity") #stacked barplot
+#geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width=.2, position=position_dodge(.9)) for error bars
+```
+
+```{r}
+# pdf(file="barplots_meanGeneExpression_byGroup.pdf")
+ggplot(data=stats, aes(x=reorder(stats$Genes,stats$mean_BM), y=stats$mean_BM)) + geom_bar(stat="identity", color="black", fill="firebrick") + labs(title="Mean Expression in Normal Bone Marrow") + theme_bw()
+ggplot(data=stats, aes(x=reorder(stats$Genes,stats$mean_DX), y=stats$mean_DX)) + geom_bar(stat="identity", color="black", fill="orchid") + labs(title="Mean Expression in Diagnostic AML Samples") + theme_bw()
+ggplot(data=stats, aes(x=reorder(stats$Genes,stats$mean_Induction), y=stats$mean_Induction)) + geom_bar(stat="identity", color="black", fill="darkmagenta") + labs(title="Mean Expression After Induction in AML Samples") + theme_bw()
+# dev.off()
+```
+
+
+
+#Waterfall Plots Colored by Group
+
+```{r}
+genes <- rownames(log2$geomean)
+
+plots <- list()
+for (i in 1:234){
+  name <- names(log2)[i]
+  gene <- genes[i]
+  title <- paste("Expression of", gene, sep=" ")
+  p <- waterfallPlot(counts$geomean, gene, phenoVector$geomean, "Count") + labs(title=title)
+  
+  fileName <- paste(title,".pdf", sep="")
+  # pdf(file=fileName)
+  print(p)
+  # dev.off()
+}
+
+```
+
+
+#Correlation of TPM to Nanostring Counts
+
+```{r}
+# GOI <- c("MSLN", "CCNA1", "PRAME", "APOC2", "APOC4")
+GOI <- rownames(counts$geomean)
+
+# pdf(file="TARGET_AML_correlation_TPM_NanostringPanel.pdf")
+corr_TPM_Nanostring <- data.frame(gene=character(),
+                                  r2=numeric(),
+                                  r2_BM=numeric())
+for (gene in GOI){
+  
+  names <- names(which(phenoVector$geomean == "DX"))
+  BM <- names(which(phenoVector$geomean == "BM"))
+  
+  TPM <- log2(as.numeric(as.vector(LD_TPM[gene, names]))+1)
+  nanostring <- log2(as.numeric(as.vector(counts$geomean[gene,names]))+1)
+  
+  BM_TPM <- log2(as.numeric(as.vector(LD_TPM[gene, BM]))+1)
+  BM_nanostring <- log2(as.numeric(as.vector(counts$geomean[gene,BM]))+1)
+  
+  
+  all_TPM <- log2(as.numeric(as.vector(LD_TPM[gene, c(BM,names)]))+1)
+  all_nanostring <- log2(as.numeric(as.vector(counts$geomean[gene,c(BM,names)]))+1)
+  
+  r2 <- round(summary(lm(TPM ~ nanostring))$adj.r.squared, digits = 3)
+  r2_BM <- round(summary(lm(all_TPM ~ all_nanostring))$adj.r.squared, digits = 3)
+  
+  corr_TPM_Nanostring <- rbind(corr_TPM_Nanostring, cbind(gene, r2, r2_BM))
+  
+  title <- paste("Correlation of Gene Expression for", gene, sep=" ")
+  fileName <- paste(title,".pdf",sep="")
+  
+
+  # pdf(file=fileName)
+  # plot(nanostring,TPM, main=title, ylab="Log2 TPM", xlab="Log2 Counts", pch=19,col="green3")
+  # points(BM_nanostring, BM_TPM, pch=15, col="salmon")
+  # abline(lm(TPM ~ nanostring), col="green4")
+  # abline(lm(all_TPM ~ all_nanostring),col="black")
+  # text(x=(max(nanostring)-1),y=1, labels=paste("R2 =",r2,sep=" "), col="green4")
+  # text(x=(max(nanostring)-1.5),y=1.5, labels=paste("R2(withBM) =",r2_BM,sep=" "))
+  # dev.off()
+}
+# dev.off()
+```
+
+
+```{r}
+rownames(corr_TPM_Nanostring) <- corr_TPM_Nanostring$gene
+corr_TPM_Nanostring <- merge(corr_TPM_Nanostring, stats, by.x=0, by.y=0)
+
+
+head(corr_TPM_Nanostring)
+# write.csv(corr_TPM_Nanostring, "TARGET_AML_NanostringPanel_corrCoefficients.csv")
+```
+
+
+
+
